@@ -122,11 +122,11 @@ func (opt *Options) estimateSize(entry *Entry) int {
 }
 
 type closers struct {
-	updateSize *y.LevelCloser
-	compactors *y.LevelCloser
-	memtable   *y.LevelCloser
-	writes     *y.LevelCloser
-	valueGC    *y.LevelCloser
+	updateSize *y.Closer
+	compactors *y.Closer
+	memtable   *y.Closer
+	writes     *y.Closer
+	valueGC    *y.Closer
 }
 
 // KV provides the various functions required to interact with Badger.
@@ -240,7 +240,7 @@ func NewKV(optParam *Options) (out *KV, err error) {
 		valueDirGuard: valueDirLockGuard,
 	}
 
-	out.closers.updateSize = y.NewLevelCloser(1)
+	out.closers.updateSize = y.NewCloser(1)
 	go out.updateSize(out.closers.updateSize)
 	out.mt = skl.NewSkiplist(arenaSize(&opt))
 
@@ -249,10 +249,10 @@ func NewKV(optParam *Options) (out *KV, err error) {
 		return nil, err
 	}
 
-	out.closers.compactors = y.NewLevelCloser(1)
+	out.closers.compactors = y.NewCloser(1)
 	out.lc.startCompact(out.closers.compactors)
 
-	out.closers.memtable = y.NewLevelCloser(1)
+	out.closers.memtable = y.NewCloser(1)
 	go out.flushMemtable(out.closers.memtable) // Need levels controller to be up.
 
 	if err = out.vlog.Open(out, &opt); err != nil {
@@ -275,7 +275,7 @@ func NewKV(optParam *Options) (out *KV, err error) {
 		vptr.Decode(val)
 	}
 
-	replayCloser := y.NewLevelCloser(1)
+	replayCloser := y.NewCloser(1)
 	go out.doWrites(replayCloser)
 
 	first := true
@@ -329,10 +329,10 @@ func NewKV(optParam *Options) (out *KV, err error) {
 	replayCloser.SignalAndWait() // Wait for replay to be applied first.
 
 	out.writeCh = make(chan *request, kvWriteChCapacity)
-	out.closers.writes = y.NewLevelCloser(1)
+	out.closers.writes = y.NewCloser(1)
 	go out.doWrites(out.closers.writes)
 
-	out.closers.valueGC = y.NewLevelCloser(1)
+	out.closers.valueGC = y.NewCloser(1)
 	go out.vlog.runGCInLoop(out.closers.valueGC)
 
 	valueDirLockGuard = nil
@@ -744,7 +744,7 @@ func writeRequestsOrLogError(s *KV, reqs []*request) {
 	}
 }
 
-func (s *KV) doWrites(lc *y.LevelCloser) {
+func (s *KV) doWrites(lc *y.Closer) {
 	defer lc.Done()
 
 	reqs := make([]*request, 0, 10)
@@ -1142,7 +1142,7 @@ type flushTask struct {
 	vptr valuePointer
 }
 
-func (s *KV) flushMemtable(lc *y.LevelCloser) error {
+func (s *KV) flushMemtable(lc *y.Closer) error {
 	defer lc.Done()
 
 	for ft := range s.flushChan {
@@ -1219,7 +1219,7 @@ func exists(path string) (bool, error) {
 	return true, err
 }
 
-func (s *KV) updateSize(lc *y.LevelCloser) {
+func (s *KV) updateSize(lc *y.Closer) {
 	defer lc.Done()
 
 	metricsTicker := time.NewTicker(5 * time.Minute)

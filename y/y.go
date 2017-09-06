@@ -92,41 +92,41 @@ func (s *Slice) Resize(sz int) []byte {
 	return s.buf[0:sz]
 }
 
-// LevelCloser holds the two things we need to close a goroutine and wait for it to finish: a chan
+// Closer holds the two things we need to close a goroutine and wait for it to finish: a chan
 // to tell the goroutine to shut down, and a WaitGroup with which to wait for it to finish shutting
-// down.  The "Level" part of the name is vestigial.
-type LevelCloser struct {
+// down.
+type Closer struct {
 	closed  chan struct{}
 	waiting sync.WaitGroup
 }
 
-func NewLevelCloser(initial int) *LevelCloser {
-	ret := &LevelCloser{closed: make(chan struct{}, 10)}
+func NewCloser(initial int) *Closer {
+	ret := &Closer{closed: make(chan struct{}, 10)}
 	ret.waiting.Add(initial)
 	return ret
 }
 
-func (lc *LevelCloser) AddRunning(delta int) {
+func (lc *Closer) AddRunning(delta int) {
 	lc.waiting.Add(delta)
 }
 
-func (lc *LevelCloser) Signal() {
+func (lc *Closer) Signal() {
 	close(lc.closed)
 }
 
-func (lc *LevelCloser) HasBeenClosed() <-chan struct{} {
+func (lc *Closer) HasBeenClosed() <-chan struct{} {
 	return lc.closed
 }
 
-func (lc *LevelCloser) Done() {
+func (lc *Closer) Done() {
 	lc.waiting.Done()
 }
 
-func (lc *LevelCloser) Wait() {
+func (lc *Closer) Wait() {
 	lc.waiting.Wait()
 }
 
-func (lc *LevelCloser) SignalAndWait() {
+func (lc *Closer) SignalAndWait() {
 	lc.Signal()
 	lc.Wait()
 }

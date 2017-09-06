@@ -171,7 +171,7 @@ func (s *levelsController) cleanupLevels() error {
 	return firstErr
 }
 
-func (s *levelsController) startCompact(lc *y.LevelCloser) {
+func (s *levelsController) startCompact(lc *y.Closer) {
 	n := s.kv.opt.NumCompactors
 	lc.AddRunning(n - 1)
 	for i := 0; i < n; i++ {
@@ -179,7 +179,7 @@ func (s *levelsController) startCompact(lc *y.LevelCloser) {
 	}
 }
 
-func (s *levelsController) runWorker(lc *y.LevelCloser) {
+func (s *levelsController) runWorker(lc *y.Closer) {
 	defer lc.Done()
 	if s.kv.opt.DoNotCompact {
 		return
