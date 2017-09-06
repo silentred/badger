@@ -19,9 +19,19 @@
 package y
 
 import (
+	"os"
+
 	"golang.org/x/sys/unix"
 )
 
 func init() {
 	datasyncFileFlag = unix.O_DSYNC
+}
+
+func Fadvise(fd *os.File, size int64, readahead bool) error {
+	flags := unix.FADV_NORMAL
+	if !readahead {
+		flags |= unix.FADV_RANDOM
+	}
+	return unix.Fadvise(int(fd.Fd()), 0, size, flags)
 }

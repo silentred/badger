@@ -17,9 +17,15 @@
 package y
 
 import (
+	"os"
 	"syscall"
 )
 
 func init() {
 	datasyncFileFlag = syscall.O_SYNC
+}
+
+func Fadvise(fd *os.File, size int64, readahead bool) error {
+	// Do nothing
+	return nil
 }

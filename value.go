@@ -89,6 +89,12 @@ func (lf *logFile) openReadOnly() error {
 		return errors.Wrapf(err, "Unable to check stat for %q", lf.path)
 	}
 	lf.size = uint32(fi.Size())
+
+	err = y.Fadvise(lf.fd, fi.Size(), false)
+	if err != nil {
+		return errors.Wrapf(err, "Unable to set fadvise for %q", lf.path)
+	}
+
 	return nil
 }
 
@@ -535,6 +541,10 @@ func (vlog *valueLog) openOrCreateFiles() error {
 			if err != nil {
 				return errors.Wrapf(err, "Unable to open value log file as RDWR")
 			}
+			err = y.Fadvise(lf.fd, int64(float64(vlog.opt.ValueLogFileSize)*1.10), false)
+			if err != nil {
+				return errors.Wrapf(err, "Unable to set fadvise on value log file")
+			}
 		} else {
 			if err := lf.openReadOnly(); err != nil {
 				return err
@@ -560,6 +570,10 @@ func (vlog *valueLog) createVlogFile(fid uint32) (*logFile, error) {
 	lf.fd, err = y.CreateSyncedFile(path, vlog.opt.SyncWrites)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Unable to create value log file")
+	}
+	err = y.Fadvise(lf.fd, int64(float64(vlog.opt.ValueLogFileSize)*1.10), false)
+	if err != nil {
+		return nil, errors.Wrapf(err, "Unable to set fadvise on value log file")
 	}
 	err = syncDir(vlog.dirPath)
 	if err != nil {
