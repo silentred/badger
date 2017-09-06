@@ -92,6 +92,9 @@ func (s *Slice) Resize(sz int) []byte {
 	return s.buf[0:sz]
 }
 
+// LevelCloser holds the two things we need to close a goroutine and wait for it to finish: a chan
+// to tell the goroutine to shut down, and a WaitGroup with which to wait for it to finish shutting
+// down.  The "Level" part of the name is vestigial.
 type LevelCloser struct {
 	closed  chan struct{}
 	waiting sync.WaitGroup
