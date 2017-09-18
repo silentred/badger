@@ -482,46 +482,53 @@ func (s *levelsController) fillTables(cd *compactDef) bool {
 	return false
 }
 
-func (s *levelsController) runCompactDef(l int, cd compactDef) (err error) {
+func (s *levelsController) runDegenerateCompaction(l int, cd compactDef) (err error) {
 	timeStart := time.Now()
+	thisLevel := cd.thisLevel
+	nextLevel := cd.nextLevel
 
+	y.AssertTrue(len(cd.top) == 1)
+	tbl := cd.top[0]
+
+	// We write to the manifest _before_ we delete files (and after we created files).
+	changes := []*protos.ManifestChange{
+		// The order matters here -- you can't temporarily have two copies of the same
+		// table id when reloading the manifest.
+		makeTableDeleteChange(tbl.ID()),
+		makeTableCreateChange(tbl.ID(), nextLevel.level),
+	}
+	if err := s.kv.manifest.addChanges(changes); err != nil {
+		return err
+	}
+
+	// We have to add to nextLevel before we remove from thisLevel, not after.  This way, we
+	// don't have a bug where reads would see keys missing from both levels.
+
+	// Note: It's critical that we add tables (replace them) in nextLevel before deleting them
+	// in thisLevel.  (We could finagle it atomically somehow.)  Also, when reading we must
+	// read, or at least acquire s.RLock(), in increasing order by level, so that we don't skip
+	// a compaction.
+
+	if err := nextLevel.replaceTables(cd.top); err != nil {
+		return err
+	}
+	if err := thisLevel.deleteTables(cd.top); err != nil {
+		return err
+	}
+
+	cd.elog.LazyPrintf("\tLOG Compact-Move %d->%d smallest:%s biggest:%s took %v\n",
+		l, l+1, string(tbl.Smallest()), string(tbl.Biggest()), time.Since(timeStart))
+	return nil
+}
+
+func (s *levelsController) runCompactDef(l int, cd compactDef) (err error) {
 	thisLevel := cd.thisLevel
 	nextLevel := cd.nextLevel
 
 	if thisLevel.level >= 1 && len(cd.bot) == 0 {
-		y.AssertTrue(len(cd.top) == 1)
-		tbl := cd.top[0]
-
-		// We write to the manifest _before_ we delete files (and after we created files).
-		changes := []*protos.ManifestChange{
-			// The order matters here -- you can't temporarily have two copies of the same
-			// table id when reloading the manifest.
-			makeTableDeleteChange(tbl.ID()),
-			makeTableCreateChange(tbl.ID(), nextLevel.level),
-		}
-		if err := s.kv.manifest.addChanges(changes); err != nil {
-			return err
-		}
-
-		// We have to add to nextLevel before we remove from thisLevel, not after.  This way, we
-		// don't have a bug where reads would see keys missing from both levels.
-
-		// Note: It's critical that we add tables (replace them) in nextLevel before deleting them
-		// in thisLevel.  (We could finagle it atomically somehow.)  Also, when reading we must
-		// read, or at least acquire s.RLock(), in increasing order by level, so that we don't skip
-		// a compaction.
-
-		if err := nextLevel.replaceTables(cd.top); err != nil {
-			return err
-		}
-		if err := thisLevel.deleteTables(cd.top); err != nil {
-			return err
-		}
-
-		cd.elog.LazyPrintf("\tLOG Compact-Move %d->%d smallest:%s biggest:%s took %v\n",
-			l, l+1, string(tbl.Smallest()), string(tbl.Biggest()), time.Since(timeStart))
-		return nil
+		return s.runDegenerateCompaction(l, cd)
 	}
+	timeStart := time.Now()
 
 	newTables, decr, err := s.compactBuildTables(l, cd)
 	if err != nil {
