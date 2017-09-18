@@ -482,20 +482,20 @@ func (s *levelsController) fillTables(cd *compactDef) bool {
 	return false
 }
 
-func (s *levelsController) runDegenerateCompaction(l int, cd compactDef) (err error) {
+func (s *levelsController) runDegenerateCompaction(thisLevel *levelHandler, nextLevel *levelHandler,
+	top []*table.Table, elog trace.Trace) (err error) {
 	timeStart := time.Now()
-	thisLevel := cd.thisLevel
-	nextLevel := cd.nextLevel
-
-	y.AssertTrue(len(cd.top) == 1)
-	tbl := cd.top[0]
+	y.AssertTrue(thisLevel.level == 0 || len(top) == 1) // Just a general fact about what's possible.
 
 	// We write to the manifest _before_ we delete files (and after we created files).
-	changes := []*protos.ManifestChange{
+	changes := make([]*protos.ManifestChange, 0, 2*len(top))
+	for _, tbl := range top {
+		tblID := tbl.ID()
 		// The order matters here -- you can't temporarily have two copies of the same
 		// table id when reloading the manifest.
-		makeTableDeleteChange(tbl.ID()),
-		makeTableCreateChange(tbl.ID(), nextLevel.level),
+		changes = append(changes,
+			makeTableDeleteChange(tblID),
+			makeTableCreateChange(tblID, nextLevel.level))
 	}
 	if err := s.kv.manifest.addChanges(changes); err != nil {
 		return err
@@ -509,24 +509,70 @@ func (s *levelsController) runDegenerateCompaction(l int, cd compactDef) (err er
 	// read, or at least acquire s.RLock(), in increasing order by level, so that we don't skip
 	// a compaction.
 
-	if err := nextLevel.replaceTables(cd.top); err != nil {
+	if err := nextLevel.replaceTables(top); err != nil {
 		return err
 	}
-	if err := thisLevel.deleteTables(cd.top); err != nil {
+	if err := thisLevel.deleteTables(top); err != nil {
 		return err
 	}
 
-	cd.elog.LazyPrintf("\tLOG Compact-Move %d->%d smallest:%s biggest:%s took %v\n",
-		l, l+1, string(tbl.Smallest()), string(tbl.Biggest()), time.Since(timeStart))
+	elog.LazyPrintf("\tLOG Compact-Move %d->%d smallest:%s biggest:%s took %v\n",
+		thisLevel.level, nextLevel.level, string(top[0].Smallest()), string(top[len(top)-1].Biggest()),
+		time.Since(timeStart))
 	return nil
+}
+
+// Builds a new slice with the tables in sorted, increasing order.  Only succeeds if the tables are
+// in increasing order, decreasing order, or some lucky non-overlapping order.
+func sortedIfNonOverlapping(top []*table.Table) ([]*table.Table, bool) {
+	if len(top) == 0 {
+		return []*table.Table{}, true
+	}
+	// we maintain an interval [minKey, maxKey] and expect the next table to be above or below that
+	// interval.  Thus handles increasing or decreasing key order, or some bizarro
+	// 0,1,-2,3,-4,5,6,... key orders that happen to line up with level 0 file boundaries
+	// perfectly.
+	maxKey := top[0].Biggest()
+	minKey := top[0].Smallest()
+	for _, tbl := range top[1:] {
+		smallest := tbl.Smallest()
+		biggest := tbl.Biggest()
+		// It's hypothetically possible (according to the table.Table API) to have an empty
+		// table, for which the biggest/smallest keys are nil.
+		if biggest == nil {
+			y.AssertTrue(smallest == nil)
+			continue
+		}
+		if bytes.Compare(maxKey, smallest) < 0 {
+			maxKey = biggest
+		} else if bytes.Compare(biggest, minKey) < 0 {
+			minKey = smallest
+		} else {
+			return nil, false
+		}
+	}
+
+	topCopy := append([]*table.Table{}, top...)
+	sort.Slice(topCopy, func(i, j int) bool {
+		return bytes.Compare(topCopy[i].Biggest(), topCopy[j].Biggest()) < 0
+	})
+
+	return topCopy, true
 }
 
 func (s *levelsController) runCompactDef(l int, cd compactDef) (err error) {
 	thisLevel := cd.thisLevel
 	nextLevel := cd.nextLevel
 
-	if thisLevel.level >= 1 && len(cd.bot) == 0 {
-		return s.runDegenerateCompaction(l, cd)
+	if len(cd.bot) == 0 {
+		if thisLevel.level >= 1 || len(cd.top) <= 1 {
+			return s.runDegenerateCompaction(thisLevel, nextLevel, cd.top, cd.elog)
+		}
+		// For level zero, we have to see if the tables' ranges are not overlapping.  (And then sort them so that we handle reverse order insertions, or very luck insertions.
+		sortedTop, nonOverlapping := sortedIfNonOverlapping(cd.top)
+		if nonOverlapping {
+			return s.runDegenerateCompaction(thisLevel, nextLevel, sortedTop, cd.elog)
+		}
 	}
 	timeStart := time.Now()
 
