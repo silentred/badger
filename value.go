@@ -24,7 +24,6 @@ import (
 	"hash/crc32"
 	"io"
 	"io/ioutil"
-	"math"
 	"math/rand"
 	"os"
 	"sort"
@@ -181,7 +180,7 @@ type logEntry func(e Entry, vp valuePointer) error
 
 // iterate iterates over log file. It doesn't not allocate new memory for every kv pair.
 // Therefore, the kv pair is only valid for the duration of fn call.
-func (lf *logFile) iterate(offset uint32, fn logEntry) error {
+func (vlog *valueLog) iterate(lf *logFile, offset uint32, fn logEntry) error {
 	_, err := lf.fd.Seek(int64(offset), io.SeekStart)
 	if err != nil {
 		return y.Wrap(err)
@@ -278,7 +277,15 @@ func (lf *logFile) iterate(offset uint32, fn logEntry) error {
 	}
 
 	if truncate {
+		if err := y.Munmap(lf.fmap); err != nil {
+			return err
+		}
+
 		if err := lf.fd.Truncate(int64(recordOffset)); err != nil {
+			return err
+		}
+
+		if err := lf.mmap(vlog.opt.ValueLogFileSize * 2); err != nil {
 			return err
 		}
 	}
@@ -365,7 +372,7 @@ func (vlog *valueLog) rewrite(f *logFile) error {
 		return nil
 	}
 
-	err := f.iterate(0, func(e Entry, vp valuePointer) error {
+	err := vlog.iterate(f, 0, func(e Entry, vp valuePointer) error {
 		return fe(e)
 	})
 	if err != nil {
@@ -636,7 +643,7 @@ func (vlog *valueLog) openOrCreateFiles() error {
 				return errors.Wrapf(err, "Unable to open value log file as RDWR")
 			}
 
-			if err := lf.mmap(math.MaxUint32); err != nil {
+			if err := lf.mmap(vlog.opt.ValueLogFileSize * 2); err != nil {
 				return errors.Wrapf(err, "Unable to mmap RDWR log file")
 			}
 		} else {
@@ -671,7 +678,7 @@ func (vlog *valueLog) createVlogFile(fid uint32) (*logFile, error) {
 		return nil, errors.Wrapf(err, "Unable to sync value log file dir")
 	}
 
-	if err = lf.mmap(math.MaxUint32); err != nil {
+	if err = lf.mmap(vlog.opt.ValueLogFileSize * 2); err != nil {
 		return nil, errors.Wrapf(err, "Unable to mmap value log file")
 	}
 
@@ -752,7 +759,7 @@ func (vlog *valueLog) Replay(ptr valuePointer, fn logEntry) error {
 			of = 0
 		}
 		f := vlog.filesMap[id]
-		err := f.iterate(of, fn)
+		err := vlog.iterate(f, of, fn)
 		if err != nil {
 			return errors.Wrapf(err, "Unable to replay value log: %q", f.path)
 		}
@@ -980,7 +987,7 @@ func (vlog *valueLog) doRunGC(gcThreshold float64) error {
 
 	start := time.Now()
 	y.AssertTrue(vlog.kv != nil)
-	err := lf.iterate(0, func(e Entry, vp valuePointer) error {
+	err := vlog.iterate(lf, 0, func(e Entry, vp valuePointer) error {
 		esz := float64(vp.Len) / (1 << 20) // in MBs. +4 for the CAS stuff.
 		skipped += esz
 		if skipped < skipFirstM {
