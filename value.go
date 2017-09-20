@@ -284,6 +284,7 @@ func (vlog *valueLog) iterate(lf *logFile, offset uint32, fn logEntry) error {
 	}
 
 	if truncate {
+		fmt.Printf("Truncating log %d after iterate to %d", lf.fid, recordOffset)
 		if err := y.Munmap(lf.fmap); err != nil {
 			return err
 		}
