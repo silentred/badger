@@ -724,6 +724,7 @@ func (vlog *valueLog) Close() error {
 		}
 
 		if id == vlog.maxFid {
+			fmt.Printf("Truncating the log file %d to %d\n", id, vlog.writableLogOffset)
 			if truncErr := f.truncateToOffset(
 				vlog.writableLogOffset); truncErr != nil && err == nil {
 				err = truncErr
