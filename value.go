@@ -144,7 +144,11 @@ func (lf *logFile) read(p valuePointer) (buf []byte, err error) {
 	return buf, err
 }
 
-func (lf *logFile) doneWriting() error {
+func (lf *logFile) truncateToOffset(offset uint32) error {
+	return lf.fd.Truncate(int64(offset))
+}
+
+func (lf *logFile) doneWriting(offset uint32) error {
 	// Sync before acquiring lock.  (We call this from write() and thus know we have shared access
 	// to the fd.)
 	if err := lf.fd.Sync(); err != nil {
@@ -161,6 +165,9 @@ func (lf *logFile) doneWriting() error {
 	defer lf.lock.Unlock()
 	if err := y.Munmap(lf.fmap); err != nil {
 		return errors.Wrapf(err, "Unable to munmap value log: %q", lf.path)
+	}
+	if err := lf.truncateToOffset(offset); err != nil {
+		return errors.Wrapf(err, "Unable to truncate file: %q", lf.path)
 	}
 	if err := lf.fd.Close(); err != nil {
 		return errors.Wrapf(err, "Unable to close value log: %q", lf.path)
@@ -709,10 +716,18 @@ func (vlog *valueLog) Close() error {
 	defer vlog.elog.Finish()
 
 	var err error
-	for _, f := range vlog.filesMap {
+	for id, f := range vlog.filesMap {
+
 		f.lock.Lock() // We won’t release the lock.
 		if munmapErr := y.Munmap(f.fmap); munmapErr != nil && err == nil {
 			err = munmapErr
+		}
+
+		if id == vlog.maxFid {
+			if truncErr := f.truncateToOffset(
+				vlog.writableLogOffset); truncErr != nil && err == nil {
+				err = truncErr
+			}
 		}
 
 		if closeErr := f.fd.Close(); closeErr != nil && err == nil {
@@ -831,7 +846,7 @@ func (vlog *valueLog) write(reqs []*request) error {
 
 		if vlog.writableLogOffset > uint32(vlog.opt.ValueLogFileSize) {
 			var err error
-			if err = curlf.doneWriting(); err != nil {
+			if err = curlf.doneWriting(vlog.writableLogOffset); err != nil {
 				return err
 			}
 
