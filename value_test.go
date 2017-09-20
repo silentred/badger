@@ -491,6 +491,7 @@ func createVlog(t *testing.T, entries []*Entry) []byte {
 
 	filename := vlogFilePath(dir, 0)
 	buf, err := ioutil.ReadFile(filename)
+	t.Logf("size of vlog buf: %d", len(buf))
 	require.NoError(t, err)
 	return buf
 }
