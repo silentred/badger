@@ -19,6 +19,7 @@ package badger
 import (
 	"bytes"
 	"sync"
+	"time"
 
 	"github.com/dgraph-io/badger/y"
 )
@@ -345,6 +346,7 @@ func (it *Iterator) Rewind() {
 func (s *KV) NewIterator(opt IteratorOptions) *Iterator {
 	tables, decr := s.getMemTables()
 	defer decr()
+	time.Sleep(500 * time.Millisecond) // TODO: Definitely don't want this in production.
 	s.vlog.incrIteratorCount()
 	var iters []y.Iterator
 	for i := 0; i < len(tables); i++ {
