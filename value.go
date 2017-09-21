@@ -284,17 +284,36 @@ func (vlog *valueLog) iterate(lf *logFile, offset uint32, fn logEntry) error {
 	}
 
 	if truncate {
-		fmt.Printf("Truncating log %d after iterate to %d", lf.fid, recordOffset)
-		if err := y.Munmap(lf.fmap); err != nil {
-			return err
+		var wasMmaped bool
+		if len(lf.fmap) > 0 {
+			wasMmaped = true
+		}
+		if wasMmaped {
+			if err := y.Munmap(lf.fmap); err != nil {
+				return err
+			}
 		}
 
+		fmt.Printf("Truncating log %d after iterate to %d", lf.fid, recordOffset)
 		if err := lf.fd.Truncate(int64(recordOffset)); err != nil {
 			return err
 		}
 
-		if err := lf.mmap(vlog.opt.ValueLogFileSize * 2); err != nil {
-			return err
+		if wasMmaped {
+			var size int64
+			if lf.fid == vlog.maxFid {
+				// writable log
+				size = vlog.opt.ValueLogFileSize * 2
+			} else {
+				fi, err := lf.fd.Stat()
+				if err != nil {
+					return errors.Wrapf(err, "Unable to calculate size of readonly log file.")
+				}
+				size = fi.Size()
+			}
+			if err := lf.mmap(size); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -650,10 +669,6 @@ func (vlog *valueLog) openOrCreateFiles() error {
 				vlog.opt.SyncWrites); err != nil {
 				return errors.Wrapf(err, "Unable to open value log file as RDWR")
 			}
-
-			if err := lf.mmap(vlog.opt.ValueLogFileSize * 2); err != nil {
-				return errors.Wrapf(err, "Unable to mmap RDWR log file")
-			}
 		} else {
 			if err := lf.openReadOnly(); err != nil {
 				return err
@@ -684,10 +699,6 @@ func (vlog *valueLog) createVlogFile(fid uint32) (*logFile, error) {
 
 	if err = syncDir(vlog.dirPath); err != nil {
 		return nil, errors.Wrapf(err, "Unable to sync value log file dir")
-	}
-
-	if err = lf.mmap(vlog.opt.ValueLogFileSize * 2); err != nil {
-		return nil, errors.Wrapf(err, "Unable to mmap value log file")
 	}
 
 	vlog.filesLock.Lock()
@@ -856,6 +867,10 @@ func (vlog *valueLog) write(reqs []*request) error {
 			y.AssertTruef(newid < 1<<16, "newid will overflow uint16: %v", newid)
 			newlf, err := vlog.createVlogFile(newid)
 			if err != nil {
+				return err
+			}
+
+			if err = newlf.mmap(2 * vlog.opt.ValueLogFileSize); err != nil {
 				return err
 			}
 
